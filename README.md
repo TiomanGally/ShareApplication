@@ -11,3 +11,10 @@ Mit AktienApp kannst du super easy deine Aktie in den application.properties hin
 | marketstack.symbols.AAPL.name           | Du kannst als Anzeigename einen Wert nach AAPL.name einfügen.                                                                                                       |
 | marketstack.symbols.AAPL.purchaseDate   | Hier trägst du das Kaufdatum ein, wann du diese Aktie gekauft hast. Im Format YYYY-MM-DD                                                                            |
 
+### Rest Calls
+
+| URL                                      | Beschreibung                                                                   |
+|------------------------------------------|--------------------------------------------------------------------------------|
+| GET localhost:8080/total                 | Gibt einem die Summe der Werte aller konfigurierten Aktien für einen Tag       |
+| GET localhost:8080/detail                | Gibt einem detailliertere End-of-day Werte für die alle konfigurierten Aktien  |
+| GET localhost:8080/detail/{AktienSymbol} | Gibt einem für übergebene Aktie alle detaillierten Close und Date Werte        |
