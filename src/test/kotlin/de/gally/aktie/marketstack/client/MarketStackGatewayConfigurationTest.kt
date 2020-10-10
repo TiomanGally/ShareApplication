@@ -3,15 +3,14 @@ package de.gally.aktie.marketstack.client
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.test.context.TestPropertySource
 import strikt.api.expectThat
 import strikt.assertions.hasEntry
 import strikt.assertions.hasSize
 import strikt.assertions.isEqualTo
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@TestPropertySource(
-    locations = ["/application.properties"], properties = [
+@SpringBootTest(
+    webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+    properties = [
         "marketstack.baseUrl=http://api.marketstack.com/v1/eod",
         "marketstack.apiKey=SomeApiKey",
         "marketstack.symbols.AAPL.name=Apple Inc.",

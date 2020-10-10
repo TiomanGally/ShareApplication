@@ -39,7 +39,7 @@ class ExceptionsKtTest {
 
 
     @DisplayName("Test with ")
-    @ParameterizedTest(name = "{arguments}")
+    @ParameterizedTest(name = "{0}")
     @ArgumentsSource(ExceptionsProvider::class)
     fun exceptionHandlerTest(param: StatusWithThrowable) {
         assertStatusAndErrorMessage(param.status, param.throwable.localizedMessage) {

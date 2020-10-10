@@ -1,23 +1,19 @@
 package de.gally.aktie.marketstack.client
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import de.gally.aktie.BaseWebClient
-import org.slf4j.LoggerFactory
+import kotlinx.coroutines.reactive.awaitFirst
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.http.HttpMethod
-import org.springframework.stereotype.Service
+import org.springframework.stereotype.Component
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.util.UriComponentsBuilder
-import reactor.core.publisher.Mono
 import java.time.LocalDate
 
-@Service
+@Component
 @EnableConfigurationProperties(MarketStackGatewayConfiguration::class)
 class MarketStackGateway(
     val config: MarketStackGatewayConfiguration,
 ) : BaseWebClient() {
-
-    private val logger = LoggerFactory.getLogger(this::class.java)
 
     /** WebClient for making requests against MarketStack */
     private val client: WebClient by lazy {
@@ -26,79 +22,108 @@ class MarketStackGateway(
             .build()
     }
 
-    /** Get for each day after purchased date the close value  of configured shares */
-    fun getDetailedInformation(): Mono<Map<String, List<MarketStackTotalResponse>>> {
-        val uri = UriComponentsBuilder.newInstance()
-            .queryParam("access_key", config.apiKey)
-            .queryParam("symbols", config.symbols.keys.joinToString(separator = ","))
-            .queryParam("date_from", getOldestPurchaseDate())
-            .build().toUriString()
+    /** Get all information for all configured shares */
+    suspend fun getDetailedInformation(): Map<String, Map<LocalDate, Double>> {
+        val uri = createUri(config.symbols.keys, getOldestPurchaseDate())
 
         log(TargetSystem.MARKET_STACK, HttpMethod.GET, config.baseUrl + uri)
 
-        return client
-            .get()
+        val response = client.get()
             .uri(uri)
-            .retrieveDetailedResponse()
-            .handleClientError(TargetSystem.MARKET_STACK)
+            .retrieve()
+            .bodyToMono(MarketStackResponse::class.java)
+            .awaitFirst()
+
+        return response.data
+            .groupBy { it.symbol }
+            .mapValues { (_, detail) -> detail.map { it.date.toLocalDate() to it.close }.toMap() }
+            .map { (symbol, data) ->
+                val name = config
+                    .symbols
+                    .getValue(symbol)
+                    .name
+
+                val values = data
+                    .filterKeys {
+                        val purchaseDate = config
+                            .symbols
+                            .getValue(symbol)
+                            .purchaseDate
+                            .toLocalDate()
+
+                        val responseDate = it.plusDays(1)
+
+                        purchaseDate.isBefore(responseDate)
+                    }
+
+                name to values
+            }.toMap()
     }
 
-    /** Get detailed share information of [symbol] */
-    fun getDetailedInformationFor(symbol: String): Mono<Map<String, List<MarketStackTotalResponse>>> {
-        val uri = UriComponentsBuilder.newInstance()
-            .queryParam("access_key", config.apiKey)
-            .queryParam("symbols", symbol)
-            .queryParam("date_from", config.symbols[symbol]?.purchaseDate)
-            .build().toUriString()
+    /** Get all information for received [symbol] */
+    suspend fun getDetailedInformationBySymbol(symbol: String): Map<String, Map<LocalDate, Double>> {
+        val uri = createUri(setOf(symbol), config.symbols[symbol]?.purchaseDate)
 
         log(TargetSystem.MARKET_STACK, HttpMethod.GET, config.baseUrl + uri)
 
-        return client
-            .get()
+        val response = client.get()
             .uri(uri)
-            .retrieveDetailedResponse()
-            .handleClientError(TargetSystem.MARKET_STACK)
+            .retrieve()
+            .bodyToMono(MarketStackResponse::class.java)
+            .awaitFirst()
+
+        return response
+            .data
+            .groupBy { it.symbol }
+            .mapValues { (_, detail) -> detail.map { it.date.toLocalDate() to it.close }.toMap() }
     }
 
-    /** Get the total close value of each day */
-    fun getTotal() = getDetailedInformation()
-        .map { it.values.flatten() }
-        .map { allCloseValues ->
-            allCloseValues
-                .groupBy { it.date }
-                .mapValues { (_, allCloseValues) ->
-                    allCloseValues.sumByDouble { it.close }
-                }
-        }
+    /** Get a summarized     value of all configured shares */
+    suspend fun getTotal(): Map<LocalDate, Double> {
+        val uri = createUri(config.symbols.keys, getOldestPurchaseDate())
 
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    private data class TotalResponse(val data: List<TotalInfo>)
+        log(TargetSystem.MARKET_STACK, HttpMethod.GET, config.baseUrl + uri)
 
-    private data class TotalInfo(val close: Double, val symbol: String, val date: String)
+        val response = client.get()
+            .uri(uri)
+            .retrieve()
+            .bodyToMono(MarketStackResponse::class.java)
+            .awaitFirst()
+
+        return response.data
+            .filter { (symbol, _, date) ->
+                val purchaseDate = config
+                    .symbols
+                    .getValue(symbol)
+                    .purchaseDate
+                    .toLocalDate()
+                val responseDate = date
+                    .toLocalDate()
+                    .plusDays(1)
+
+                purchaseDate.isBefore(responseDate)
+            }
+            .map { it.date.toLocalDate() to it.close }
+            .groupBy { it.first }
+            .mapValues { (_, data) -> data.sumByDouble { it.second } }
+    }
+
+    private fun createUri(symbols: Set<String>, dateFrom: String?) = UriComponentsBuilder.newInstance()
+        .queryParam("access_key", config.apiKey)
+        .queryParam("symbols", symbols.joinToString(separator = ","))
+        .queryParam("date_from", dateFrom)
+        .build()
+        .toUriString()
 
     private fun getOldestPurchaseDate() = config.symbols
         .values
         .map { LocalDate.parse(it.purchaseDate) }
         .minBy { it }
-        ?.toString()
+        .toString()
 
-    private fun String.toLocalDate() = LocalDate.parse(this.substringBefore('T'))
+    private data class MarketStackResponse(val data: List<MarketStackDataResponse>)
 
-    private fun WebClient.RequestHeadersSpec<*>.retrieveDetailedResponse() = retrieve()
-        .bodyToMono(TotalResponse::class.java)
-        .doOnSuccess { logger.info("Received Response: $it") }
-        .map { response -> response.data.map { MarketStackDetailedResponse(it.close, it.symbol, it.date) } }
-        .map { allFilteredMarketStackDetailedResponses ->
-            val response = mutableMapOf<String, MutableList<MarketStackTotalResponse>>()
+    private data class MarketStackDataResponse(val symbol: String, val close: Double, val date: String)
 
-            allFilteredMarketStackDetailedResponses.map {
-                response
-                    .getOrPut(it.symbol, { mutableListOf() })
-                    .add(MarketStackTotalResponse(it.date.toLocalDate(), it.close))
-            }
-
-            return@map response
-                .toMap()
-                .mapValues { (_, list) -> list.toList() }
-        }
+    private fun String.toLocalDate() = substringBefore('T').let { LocalDate.parse(it) }
 }
